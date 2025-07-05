@@ -1,25 +1,45 @@
 use nu_plugin::{EvaluatedCall, JsonSerializer, serve_plugin};
 use nu_plugin::{EngineInterface, Plugin, PluginCommand, SimplePluginCommand};
-use nu_protocol::{LabeledError, Signature, Type, Value, Span};
+use nu_protocol::{LabeledError, Signature, Span, Type, Value};
 
-struct LenPlugin;
+struct TabfyPlugin {
+    schemas: Vec<Schema>,
+}
 
-impl Plugin for LenPlugin {
+impl Plugin for TabfyPlugin {
     fn version(&self) -> String {
         env!("CARGO_PKG_VERSION").into()
     }
 
     fn commands(&self) -> Vec<Box<dyn PluginCommand<Plugin = Self>>> {
         vec![
-            Box::new(Len),
+            Box::new(Tabfy),
         ]
     }
 }
 
-struct Len;
+impl TabfyPlugin {
+    fn new() -> Self {
+        TabfyPlugin {
+            schemas: vec![
+                Schema {
+                    regex: r"(?i)tabfy".to_string(),
+                    recipe: "tabfy".to_string(),
+                },
+            ],
+        }
+    }
+}
 
-impl SimplePluginCommand for Len {
-    type Plugin = LenPlugin;
+struct Schema {
+    regex: String,
+    recipe: String,
+}
+
+struct Tabfy;
+
+impl SimplePluginCommand for Tabfy {
+    type Plugin = TabfyPlugin;
 
     fn name(&self) -> &str {
         "tabfy"
@@ -36,26 +56,26 @@ impl SimplePluginCommand for Len {
 
     fn run(
         &self,
-        _plugin: &LenPlugin,
-        _engine: &EngineInterface,
+        _plugin: &TabfyPlugin,
+        engine: &EngineInterface,
         call: &EvaluatedCall,
         input: &Value,
     ) -> Result<Value, LabeledError> {
         let span = input.span();
         match input {
             Value::String { val, .. } => {
-                let content_of_span = _engine.get_span_contents(span).unwrap();
-                let tabfy_span = _engine.get_span_contents(call.head).unwrap();
-                let content = _engine.get_span_contents(Span::new(span.start, call.head.start)).unwrap();
-                Ok(
-                    Value::List { vals: vec![
-                        Value::int(span.start as i64, span),
-                        Value::int(span.end as i64, span),
-                        Value::String { val: String::from_utf8(content_of_span.clone()).unwrap(), internal_span: span },
-                        Value::String { val: String::from_utf8(tabfy_span.clone()).unwrap(), internal_span: span },
-                        Value::String { val: String::from_utf8(content.clone()).unwrap(), internal_span: span }
-                    ], internal_span: span }
-                )
+                let input_span = self.parse_span_into_string(engine, span.start, call.head.start).unwrap();
+                if let Some(first_pipe_pos) = input_span.find('|') {
+                    let input_command = &input_span[..first_pipe_pos];
+                    Ok(
+                        Value::String{ val: input_command.to_string(), internal_span: call.head.clone() }
+                    )
+                } else {
+                    return Err(
+                        LabeledError::new("Expected '|' in input string")
+                            .with_label("input string does not contain '|'", call.head)
+                    );
+                }
             },
             _ => Err(
                 LabeledError::new("Expected String input from pipeline")
@@ -68,6 +88,17 @@ impl SimplePluginCommand for Len {
     }
 }
 
+impl Tabfy {
+    fn parse_span_into_string(&self, _engine: &EngineInterface, start: usize, end: usize) -> Result<String, LabeledError> {
+        let span = Span::new(start, end);
+        let span_contents = _engine.get_span_contents(span)?;
+        String::from_utf8(span_contents).map_err(|_| {
+            LabeledError::new("Invalid UTF-8 sequence")
+                .with_label("span contents are not valid UTF-8", span)
+        })
+    }
+}
+
 fn main() {
-    serve_plugin(&LenPlugin, JsonSerializer)
+    serve_plugin(&TabfyPlugin::new(), JsonSerializer)
 }
